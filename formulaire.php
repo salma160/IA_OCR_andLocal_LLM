@@ -68,7 +68,9 @@
     ><br><br>
 
     <h6>
-        Attention : le document déposé doit être au format <strong>PDF</strong> et contenir uniquement la face avant de votre Carte Nationale d'Identité.
+
+        Attention : le document déposé doit être au format <strong>PDF/JPEG/JPG</strong>  et contenir uniquement la face avant de votre Carte Nationale d'Identité.
+
         Pour garantir une extraction optimale des informations, assurez-vous que la carte est bien centrée, que l'image est nette, suffisamment éclairée, sur un fond uniforme et que les quatre coins de la carte sont visibles.
     </h6>
 

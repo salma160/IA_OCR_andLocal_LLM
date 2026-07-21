@@ -1,65 +1,180 @@
-import cv2 as cv
-import easyocr
-from ollama import chat
+# =====================================================
+# IMPORTS
+# =====================================================
+
+import os
+import re
 import sys
+
+import cv2 as cv
+import fitz
+
+from ollama import chat
 
 from analyse_img import analyser_img
 from ocr_paddle import ocr_paddle
 
-# =====================================================
-# Chargement EasyOCR (une seule fois)
-# =====================================================
-
-reader_ar = easyocr.Reader(
-    ['ar'],
-    gpu=False
-)
-
-
-
-
 
 # =====================================================
-# Récupération des données envoyées par PHP
+# INFORMATIONS PYTHON (DEBUG)
+# =====================================================
+
+print("Python :", sys.executable)
+print("Version :", sys.version)
+
+try:
+    import packaging
+    print("Packaging :", packaging.__file__)
+except ImportError:
+    print("Packaging : non trouvé")
+
+
+# =====================================================
+# VERIFICATION DES ARGUMENTS
+# =====================================================
+
+if len(sys.argv) != 9:
+    raise Exception(
+        "Nombre d'arguments incorrect.\n"
+        "Utilisation : python main.py image nom prenom nom_ar prenom_ar dateNaissance cin dateExpiration"
+    )
+
+
+# =====================================================
+# ARGUMENTS RECUS DE PHP
 # =====================================================
 
 chemin = sys.argv[1]
 
-nom_form = sys.argv[2]
-prenom_form = sys.argv[3]
-nom_ar_form = sys.argv[4]
-prenom_ar_form = sys.argv[5]
-date_naissance_form = sys.argv[6]
-cin_form = sys.argv[7]
-date_expiration_form = sys.argv[8]
+nom_form = sys.argv[2].strip()
+prenom_form = sys.argv[3].strip()
+
+nom_ar_form = sys.argv[4].strip()
+prenom_ar_form = sys.argv[5].strip()
+
+date_naissance_form = sys.argv[6].strip()
+cin_form = sys.argv[7].strip()
+date_expiration_form = sys.argv[8].strip()
+
 
 # =====================================================
-# Plus tard : conversion PDF -> JPEG
+# FONCTIONS UTILITAIRES
 # =====================================================
 
-"""
-import fitz
+def normaliser_texte(texte):
+    """
+    Met en majuscules, supprime les espaces inutiles.
+    """
 
-doc = fitz.open(chemin)
+    texte = texte.upper().strip()
 
-page = doc.load_page(0)
+    texte = re.sub(r"\s+", " ", texte)
 
-pix = page.get_pixmap(dpi=300)
-
-pix.save("temp_pdf.jpg")
-
-chemin = "temp_pdf.jpg"
-"""
+    return texte
 
 
+def normaliser_cin(cin):
+    """
+    K71415
+    k71415
+    K 71415
+
+    => K71415
+    """
+
+    cin = normaliser_texte(cin)
+
+    cin = cin.replace(" ", "")
+
+    return cin
+
+
+def normaliser_date(date):
+    """
+    Accepte :
+
+    12.04.2031
+    12/04/2031
+    12-04-2031
+    2031-04-12
+
+    Retourne toujours :
+
+    12.04.2031
+    """
+
+    if not date:
+        return ""
+
+    date = date.strip()
+
+    date = date.replace("/", ".")
+    date = date.replace("-", ".")
+
+    date = re.sub(
+        r"VALABLE\s*JUSQU['’]?\s*AU",
+        "",
+        date,
+        flags=re.IGNORECASE
+    )
+
+    date = date.strip()
+
+    # JJ.MM.AAAA
+
+    m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", date)
+
+    if m:
+        return f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+
+    # AAAA.MM.JJ
+
+    m = re.search(r"(\d{4})\.(\d{2})\.(\d{2})", date)
+
+    if m:
+        return f"{m.group(3)}.{m.group(2)}.{m.group(1)}"
+
+    return date
+
+# =====================================================
+# LECTURE DU FICHIER (JPEG OU PDF)
+# =====================================================
+
+extension = os.path.splitext(chemin)[1].lower()
+
+chemin_pdf = None
+
+if extension == ".pdf":
+
+    print("\n========== CONVERSION PDF ==========\n")
+
+    doc = fitz.open(chemin)
+
+    page = doc.load_page(0)
+
+    pix = page.get_pixmap(dpi=300)
+
+    chemin_pdf = "temp_pdf.jpg"
+
+    pix.save(chemin_pdf)
+
+    doc.close()
+
+    chemin = chemin_pdf
+
+
+# =====================================================
+# LECTURE DE L'IMAGE
+# =====================================================
 
 img = cv.imread(chemin)
 
 if img is None:
-    raise ValueError("Impossible de lire l'image.")
+    raise Exception("Impossible de lire l'image.")
+
 
 # =====================================================
-# Agrandissement
+# AGRANDISSEMENT
 # =====================================================
 
 img = cv.resize(
@@ -70,46 +185,161 @@ img = cv.resize(
     interpolation=cv.INTER_CUBIC
 )
 
+
 # =====================================================
-# Prétraitement
+# PRETRAITEMENT
 # =====================================================
 
-img_gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+img_gray = cv.cvtColor(
+    img,
+    cv.COLOR_BGR2GRAY
+)
 
 img_gray = analyser_img(img_gray)
 
-# Paddle veut une image BGR
-img_bgr = cv.cvtColor(img_gray, cv.COLOR_GRAY2BGR)
 
-# Sauvegarde temporaire
+# =====================================================
+# RETOUR EN BGR POUR PADDLEOCR
+# =====================================================
+
+img_bgr = cv.cvtColor(
+    img_gray,
+    cv.COLOR_GRAY2BGR
+)
+
+
+# =====================================================
+# IMAGE TEMPORAIRE POUR LE LLM
+# =====================================================
+
 chemin_temp = "temp_ocr.jpg"
 
-cv.imwrite(chemin_temp, img_bgr)
+cv.imwrite(
+    chemin_temp,
+    img_bgr
+)
 
 # =====================================================
-# PaddleOCR (Français)
+# PADDLEOCR
 # =====================================================
+
+print("\n========== OCR PADDLE ==========\n")
 
 texte_fr = ocr_paddle(img_bgr)
 
-print("\n========== OCR Paddle ==========\n")
 print(texte_fr)
 
+
 # =====================================================
-# EasyOCR (Arabe)
+# EXTRACTION PYTHON
 # =====================================================
 
-print("\n========== OCR EasyOCR (Arabe) ==========\n")
+print("\n========== EXTRACTION PYTHON ==========\n")
 
-resultats_ar = reader_ar.readtext(
-    img_bgr,
-    detail=0,
-    paragraph=False
+lignes = []
+
+for ligne in texte_fr.splitlines():
+
+    ligne = ligne.strip()
+
+    if ligne != "":
+        lignes.append(ligne)
+
+
+nom_ocr = ""
+prenom_ocr = ""
+cin_ocr = ""
+date_naissance_ocr = ""
+date_validite_ocr = ""
+
+
+# =====================================================
+# NOM / PRENOM
+# =====================================================
+
+for i, ligne in enumerate(lignes):
+
+    if "CARTE NATIONALE" in ligne.upper():
+
+        # Première ligne après le titre = prénom
+
+        if i + 1 < len(lignes):
+            prenom_ocr = normaliser_texte(lignes[i + 1])
+
+        # Deuxième ligne = nom
+
+        if i + 2 < len(lignes):
+            nom_ocr = normaliser_texte(lignes[i + 2])
+
+        break
+
+
+# =====================================================
+# CIN
+# =====================================================
+
+m = re.search(
+    r"\b[A-Z]{1,2}\s*\d{4,8}\b",
+    texte_fr.upper()
 )
 
-texte_ar = "\n".join(resultats_ar)
+if m:
 
-print(texte_ar)
+    cin_ocr = normaliser_cin(
+        m.group()
+    )
+
+
+# =====================================================
+# DATES
+# =====================================================
+
+dates = re.findall(
+    r"\d{2}[./-]\d{2}[./-]\d{4}|\d{4}[./-]\d{2}[./-]\d{2}",
+    texte_fr
+)
+
+dates = [
+    normaliser_date(d)
+    for d in dates
+]
+
+
+if len(dates) >= 1:
+
+    # Sur la CIN marocaine la dernière date est
+    # quasiment toujours la date de validité.
+
+    date_validite_ocr = dates[-1]
+
+
+if len(dates) >= 2:
+
+    # La première est généralement la naissance.
+
+    date_naissance_ocr = dates[0]
+
+
+# =====================================================
+# AFFICHAGE
+# =====================================================
+
+print("Nom OCR            :", nom_ocr)
+print("Prénom OCR         :", prenom_ocr)
+print("CIN OCR            :", cin_ocr)
+print("Naissance OCR      :", date_naissance_ocr)
+print("Validité OCR       :", date_validite_ocr)
+
+
+# =====================================================
+# OCR ARABE
+# =====================================================
+
+# EasyOCR a été retiré.
+# On laisse une variable vide afin que
+# MiniCPM puisse compléter si nécessaire.
+
+texte_ar = ""
 
 # =====================================================
 # MiniCPM-V
@@ -117,148 +347,178 @@ print(texte_ar)
 
 print("\n========== MiniCPM-V ==========\n")
 
-reponse = chat(
-    model="minicpm-v:latest",
-    messages=[
-        {
-            "role": "user",
-            
-"content": f"""
-Tu es un moteur OCR.
+prompt = f"""
+Tu es un système d'extraction d'informations.
 
-Tu dois uniquement recopier les informations visibles sur la carte.
+Tu reçois :
 
-Ne traduis jamais.
+- une image de Carte Nationale d'Identité marocaine ;
+- le texte OCR suivant.
 
-N'invente jamais.
+Tu dois UNIQUEMENT extraire les champs.
 
-N'interprète jamais.
+IMPORTANT :
 
-Sur une Carte Nationale d'Identité marocaine :
+- Le premier nom français est le PRÉNOM.
+- Le deuxième nom français est le NOM.
+- Le numéro CIN commence par une ou deux lettres suivies de chiffres.
+- La date de validité est celle qui suit "Valable jusqu'au".
+- Si une information est absente, écrire UNKNOWN.
+- Ne jamais expliquer.
+- Ne jamais ajouter de texte.
 
-- la première ligne contenant un nom en français correspond toujours au PRÉNOM ;
-- la deuxième ligne correspond toujours au NOM.
-
-Exemple :
-
-Première ligne :
-ABDELHAFID
-
-Deuxième ligne :
-LECHKAR
-
-Tu dois répondre :
-
-Nom (français) : LECHKAR
-Prénom (français) : ABDELHAFID
-
-La date de validité est la date située juste après la mention :
-
-Valable jusqu'au
-
-Si cette date est visible, recopie-la exactement.
-
-Ne laisse jamais ce champ vide.
-
-Si une information est réellement illisible, écris UNKNOWN.
-
-Réponds UNIQUEMENT sous cette forme :
+Réponds EXACTEMENT sous cette forme :
 
 Nom (français) :
 Prénom (français) :
+Nom (arabe) :
+Prénom (arabe) :
 Numéro CIN :
 Date de naissance :
 Lieu de naissance :
 Date de validité :
 
-=====================
-OCR français :
+=================
+
+OCR :
 
 {texte_fr}
+"""
 
-=====================
-OCR arabe :
-
-{texte_ar}
-""",
+reponse = chat(
+    model="minicpm-v:latest",
+    messages=[
+        {
+            "role": "user",
+            "content": prompt,
             "images": [chemin_temp]
         }
     ]
 )
 
-print(reponse["message"]["content"])
-# =====================================================
-# Récupération des informations du LLM
-# =====================================================
-
 texte_llm = reponse["message"]["content"]
+
+print(texte_llm)
+
+
+# =====================================================
+# Lecture de la réponse du LLM
+# =====================================================
 
 infos = {}
 
 for ligne in texte_llm.splitlines():
 
-    if ":" in ligne:
+    if ":" not in ligne:
+        continue
 
-        cle, valeur = ligne.split(":", 1)
+    cle, valeur = ligne.split(":", 1)
 
-        infos[cle.strip()] = valeur.strip()
-# =====================================================
-# Comparaison avec les données du formulaire
-# =====================================================
-
-erreurs = []
+    infos[cle.strip()] = valeur.strip()
 
 # =====================================================
-# Nom + prénom
-# =====================================================
-
-nom_llm = infos.get("Nom (français)", "").upper()
-prenom_llm = infos.get("Prénom (français)", "").upper()
-
-if nom_llm.strip().upper() != nom_form.strip().upper():
-    erreurs.append("Nom français incorrect")
-
-if prenom_llm.strip().upper() != prenom_form.strip().upper():
-    erreurs.append("Prénom français incorrect")
-
-# =====================================================
-# Numéro CIN
-# =====================================================
-
-cin_llm = infos.get("Numéro CIN", "").upper().strip()
-
-if cin_llm != cin_form.upper():
-    erreurs.append("Numéro CIN incorrect")
-
-# =====================================================
-# Date d'expiration
-# =====================================================
-
-date_llm = infos.get("Date de validité", "")
-
-date_llm = (
-    date_llm
-    .replace("Valable jusqu'au", "")
-    .replace("Valable jusqu’à", "")
-    .replace("Valable jusquau", "")
-    .replace("/", ".").replace("-", ".")
-    .strip()
-)
-
-# Le formulaire donne : 2031-04-12
-# On le transforme en : 12.04.2031
-
-annee, mois, jour = date_expiration_form.split("-")
-
-date_form = f"{jour}.{mois}.{annee}"
-
-if date_llm != date_form:
-    erreurs.append("Date d'expiration incorrecte")
-# =====================================================
-# Résultat final
+# VERIFICATION
 # =====================================================
 
 print("\n========== VERIFICATION ==========\n")
+
+erreurs = []
+
+
+# -------------------------
+# Nom
+# -------------------------
+
+nom_llm = normaliser_texte(
+    infos.get("Nom (français)", "")
+)
+
+nom_form = normaliser_texte(nom_form)
+
+if nom_llm != nom_form:
+
+    erreurs.append(
+        f"Nom incorrect : OCR='{nom_llm}' / Formulaire='{nom_form}'"
+    )
+
+
+# -------------------------
+# Prénom
+# -------------------------
+
+prenom_llm = normaliser_texte(
+    infos.get("Prénom (français)", "")
+)
+
+prenom_form = normaliser_texte(prenom_form)
+
+if prenom_llm != prenom_form:
+
+    erreurs.append(
+        f"Prénom incorrect : OCR='{prenom_llm}' / Formulaire='{prenom_form}'"
+    )
+
+
+# -------------------------
+# CIN
+# -------------------------
+
+cin_llm = normaliser_cin(
+    infos.get("Numéro CIN", "")
+)
+
+if cin_llm != cin_form:
+
+    erreurs.append(
+        f"CIN incorrect : OCR='{cin_llm}' / Formulaire='{cin_form}'"
+    )
+
+
+# -------------------------
+# Date de naissance
+# -------------------------
+
+date_naissance_llm = normaliser_date(
+    infos.get("Date de naissance", "")
+)
+
+date_naissance_form = normaliser_date(
+    date_naissance_form
+)
+
+if (
+    date_naissance_llm != ""
+    and
+    date_naissance_llm != date_naissance_form
+):
+
+    erreurs.append(
+        f"Date de naissance incorrecte : OCR='{date_naissance_llm}' / Formulaire='{date_naissance_form}'"
+    )
+
+
+# -------------------------
+# Date de validité
+# -------------------------
+
+date_validite_llm = normaliser_date(
+    infos.get("Date de validité", "")
+)
+
+date_expiration_form = normaliser_date(
+    date_expiration_form
+)
+
+if date_validite_llm != date_expiration_form:
+
+    erreurs.append(
+        f"Date d'expiration incorrecte : OCR='{date_validite_llm}' / Formulaire='{date_expiration_form}'"
+    )
+
+
+# =====================================================
+# RESULTAT
+# =====================================================
 
 if len(erreurs) == 0:
 
@@ -266,7 +526,23 @@ if len(erreurs) == 0:
 
 else:
 
-    print("VERIFICATION ECHOUEE")
+    print("VERIFICATION ECHOUEE\n")
 
-    for e in erreurs:
-        print("-", e)
+    for erreur in erreurs:
+
+        print("-", erreur)
+
+
+# =====================================================
+# NETTOYAGE
+# =====================================================
+
+if os.path.exists(chemin_temp):
+
+    os.remove(chemin_temp)
+
+if chemin_pdf is not None:
+
+    if os.path.exists(chemin_pdf):
+
+        os.remove(chemin_pdf)

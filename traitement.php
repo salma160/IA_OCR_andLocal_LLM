@@ -4,6 +4,7 @@ $erreurs = [];
 
 if ($_SERVER["REQUEST_METHOD"] == "POST")
 {
+
     //=========================================================
     // Récupération des champs
     //=========================================================
@@ -15,8 +16,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST")
     $prenom_ar = trim($_POST["prenom_ar"]);
 
     $date_naissance = trim($_POST["date_naissance"]);
-
-    
 
     $cin = strtoupper(trim($_POST["cin"]));
 
@@ -44,8 +43,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST")
     if(empty($date_naissance))
         $erreurs[] = "Veuillez saisir la date de naissance.";
 
-    
-
     if(empty($cin))
         $erreurs[] = "Veuillez saisir le numéro de CIN.";
 
@@ -60,7 +57,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST")
 
 
     //=========================================================
-    // Vérification de l'image
+    // Vérification du fichier
     //=========================================================
 
     if(!isset($_FILES["cin_image"]))
@@ -69,21 +66,32 @@ if ($_SERVER["REQUEST_METHOD"] == "POST")
     }
     else
     {
+
         if($_FILES["cin_image"]["error"] != UPLOAD_ERR_OK)
         {
             $erreurs[] = "Erreur lors du téléchargement.";
         }
         else
         {
+
             $extension = strtolower(
-                pathinfo($_FILES["cin_image"]["name"], PATHINFO_EXTENSION)
+                pathinfo(
+                    $_FILES["cin_image"]["name"],
+                    PATHINFO_EXTENSION
+                )
             );
 
-            if($extension != "jpg" && $extension != "jpeg")
+            if(
+                $extension != "jpg" &&
+                $extension != "jpeg" &&
+                $extension != "pdf"
+            )
             {
-                $erreurs[] = "L'image doit être au format JPG ou JPEG.";
+                $erreurs[] = "Le fichier doit être au format JPG, JPEG ou PDF.";
             }
+
         }
+
     }
 
 
@@ -99,22 +107,21 @@ if ($_SERVER["REQUEST_METHOD"] == "POST")
             mkdir("uploads");
         }
 
-        $image =  __DIR__ . "\\uploads\\cin.jpg";;
+        $image = __DIR__ . "\\uploads\\cin." . $extension;
 
         move_uploaded_file(
             $_FILES["cin_image"]["tmp_name"],
             $image
         );
 
-        //=====================================================
-        // Exécution de Python
-        //=====================================================
 
-       
+        //=====================================================
+        // Commande Python
+        //=====================================================
 
         $commande =
-        'python ' .
-        escapeshellarg("D:\\sujet_stageJM2\\main.py") . " " .
+        '"C:\\Users\\mlk\\AppData\\Local\\Programs\\Python\\Python313\\python.exe" ' .
+        escapeshellarg(__DIR__ . "\\main.py") . " " .
         escapeshellarg($image) . " " .
         escapeshellarg($nom_fr) . " " .
         escapeshellarg($prenom_fr) . " " .
@@ -124,23 +131,49 @@ if ($_SERVER["REQUEST_METHOD"] == "POST")
         escapeshellarg($cin) . " " .
         escapeshellarg($date_expiration);
 
-// pclose(popen($commande, "r"));
+        ?>
 
-// include("confirmation.php");
-echo "<pre>";
-echo $commande;
-echo "</pre>";
+        <!DOCTYPE html>
+        <html lang="fr">
+        <head>
+            <meta charset="UTF-8">
+            <title>Commande Python</title>
+        </head>
+        <body>
+
+            <h2>Fichier enregistré avec succès.</h2>
+
+            <p>Copiez cette commande et exécutez-la dans le terminal VS Code :</p>
+
+            <textarea rows="8" cols="180" readonly><?=
+                htmlspecialchars($commande)
+            ?></textarea>
+
+            <br><br>
+
+            <a href="formulaire.php">
+                Retour au formulaire
+            </a>
+
+        </body>
+        </html>
+
+        <?php
 
     }
     else
     {
+
         include("formulaire.php");
+
     }
 
 }
 else
 {
+
     include("formulaire.php");
+
 }
 
 ?>
