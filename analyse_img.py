@@ -56,8 +56,8 @@ def analyser_img(img_gray):
 
     if var_contours < BLUR_THRES:
         #BLUR = True
-        print("Veuillez reprendre une photo plus nette de votre carte.")
-        exit()
+        return None
+        # exit()
 
     return img_gray
 

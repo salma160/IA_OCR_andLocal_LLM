@@ -25,7 +25,7 @@ def connecter_mysql():
 
 
 # =========================================================
-# NORMALISATION
+# NORMALISATION TEXTE
 # =========================================================
 
 def normaliser_texte(texte):
@@ -33,19 +33,49 @@ def normaliser_texte(texte):
     if texte is None:
         return ""
 
-    texte = str(texte).upper().strip()
-    texte = re.sub(r"\s+", " ", texte)
+    texte = str(texte).strip()
+
+    texte = texte.replace("**", "")
+    texte = texte.replace("*", "")
+    texte = texte.strip()
+
+    if texte.upper() in [
+        "UNKNOWN",
+        "INCONNU",
+        "N/A",
+        "NA",
+        ""
+    ]:
+        return ""
+
+    texte = texte.upper()
+
+    texte = re.sub(
+        r"\s+",
+        " ",
+        texte
+    )
 
     return texte
 
 
+# =========================================================
+# NORMALISATION CIN
+# =========================================================
+
 def normaliser_cin(cin):
 
     cin = normaliser_texte(cin)
+
     cin = cin.replace(" ", "")
 
     return cin
 
+
+# =========================================================
+# NORMALISATION DATE
+# Format interne : JJ.MM.AAAA
+# =========================================================
 
 def normaliser_date(date):
 
@@ -53,6 +83,14 @@ def normaliser_date(date):
         return ""
 
     date = str(date).strip()
+
+    if date.upper() in [
+        "UNKNOWN",
+        "INCONNU",
+        "N/A",
+        "NA"
+    ]:
+        return ""
 
     date = date.replace("/", ".")
     date = date.replace("-", ".")
@@ -64,6 +102,7 @@ def normaliser_date(date):
     )
 
     if match:
+
         return (
             f"{match.group(1)}."
             f"{match.group(2)}."
@@ -77,13 +116,41 @@ def normaliser_date(date):
     )
 
     if match:
+
         return (
             f"{match.group(3)}."
             f"{match.group(2)}."
             f"{match.group(1)}"
         )
 
-    return date
+    return ""
+
+
+# =========================================================
+# DATE → FORMAT MYSQL
+# JJ.MM.AAAA → AAAA-MM-JJ
+# =========================================================
+
+def date_vers_mysql(date):
+
+    date = normaliser_date(date)
+
+    if not date:
+        return None
+
+    match = re.match(
+        r"(\d{2})\.(\d{2})\.(\d{4})",
+        date
+    )
+
+    if not match:
+        return None
+
+    jour = match.group(1)
+    mois = match.group(2)
+    annee = match.group(3)
+
+    return f"{annee}-{mois}-{jour}"
 
 
 # =========================================================
@@ -148,6 +215,15 @@ def enregistrer_verification(
 
     curseur = connexion.cursor()
 
+    # Conversion des dates pour MySQL
+    date_naissance_mysql = date_vers_mysql(
+        date_naissance_ocr
+    )
+
+    date_expiration_mysql = date_vers_mysql(
+        date_expiration_ocr
+    )
+
     requete = """
         INSERT INTO verifications (
 
@@ -180,11 +256,11 @@ def enregistrer_verification(
         requete,
         (
             id_candidat,
-            nom_ocr,
-            prenom_ocr,
-            numero_cin_ocr,
-            date_naissance_ocr,
-            date_expiration_ocr,
+            nom_ocr if nom_ocr else None,
+            prenom_ocr if prenom_ocr else None,
+            numero_cin_ocr if numero_cin_ocr else None,
+            date_naissance_mysql,
+            date_expiration_mysql,
             statut
         )
     )
@@ -193,6 +269,55 @@ def enregistrer_verification(
 
     curseur.close()
     connexion.close()
+
+
+# =========================================================
+# EXTRAIRE UNE INFORMATION DE LA RÉPONSE MINICPM
+# =========================================================
+
+def extraire_valeur(infos, cles_possibles):
+
+    for cle in cles_possibles:
+
+        for cle_reponse, valeur in infos.items():
+
+            cle_reponse_normalisee = (
+                cle_reponse
+                .strip()
+                .replace("*", "")
+                .replace("#", "")
+                .strip()
+                .upper()
+            )
+
+            cle_recherchee = (
+                cle
+                .strip()
+                .replace("*", "")
+                .replace("#", "")
+                .strip()
+                .upper()
+            )
+
+            if cle_reponse_normalisee == cle_recherchee:
+
+                valeur = valeur.strip()
+
+                if valeur.upper() not in [
+                    "UNKNOWN",
+                    "INCONNU",
+                    "N/A",
+                    "NA",
+                    ""
+                ]:
+
+                    valeur = valeur.replace("**", "")
+                    valeur = valeur.replace("*", "")
+                    valeur = valeur.strip()
+
+                    return valeur
+
+    return ""
 
 
 # =========================================================
@@ -252,7 +377,7 @@ def traiter_candidat(candidat):
             None,
             None,
             None,
-            "NON_VALIDE"
+            "DOCUMENT_INVALIDE"
         )
 
         return
@@ -308,7 +433,9 @@ def traiter_candidat(candidat):
 
     if img is None:
 
-        print("ERREUR : impossible de lire l'image.")
+        print(
+            "ERREUR : impossible de lire l'image."
+        )
 
         enregistrer_verification(
             id_candidat,
@@ -317,7 +444,7 @@ def traiter_candidat(candidat):
             None,
             None,
             None,
-            "NON_VALIDE"
+            "DOCUMENT_INVALIDE"
         )
 
         return
@@ -348,6 +475,30 @@ def traiter_candidat(candidat):
     img_gray = analyser_img(
         img_gray
     )
+
+
+    # =====================================================
+    # DOCUMENT INVALIDE
+    # =====================================================
+
+    if img_gray is None:
+
+        print()
+        print("============================================")
+        print("VERIFICATION : DOCUMENT_INVALIDE")
+        print("============================================")
+
+        enregistrer_verification(
+            id_candidat,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "DOCUMENT_INVALIDE"
+        )
+
+        return
 
 
     # =====================================================
@@ -450,7 +601,7 @@ def traiter_candidat(candidat):
 
 
     # =====================================================
-    # DATES
+    # DATES OCR
     # =====================================================
 
     dates = re.findall(
@@ -465,6 +616,11 @@ def traiter_candidat(candidat):
         for date in dates
     ]
 
+    dates = [
+        date for date in dates
+        if date
+    ]
+
 
     if len(dates) >= 1:
 
@@ -477,17 +633,32 @@ def traiter_candidat(candidat):
 
 
     # =====================================================
-    # AFFICHAGE
+    # AFFICHAGE OCR
     # =====================================================
 
     print()
-    print("Nom OCR :", nom_ocr)
-    print("Prénom OCR :", prenom_ocr)
-    print("CIN OCR :", numero_cin_ocr)
+    print("========== INFORMATIONS OCR PADDLE ==========")
+
+    print(
+        "Nom OCR :",
+        nom_ocr
+    )
+
+    print(
+        "Prénom OCR :",
+        prenom_ocr
+    )
+
+    print(
+        "CIN OCR :",
+        numero_cin_ocr
+    )
+
     print(
         "Date naissance OCR :",
         date_naissance_ocr
     )
+
     print(
         "Date expiration OCR :",
         date_expiration_ocr
@@ -526,13 +697,18 @@ UNKNOWN
 
 
     reponse = chat(
+
         model="minicpm-v:latest",
 
         messages=[
             {
                 "role": "user",
+
                 "content": prompt,
-                "images": [chemin_temp]
+
+                "images": [
+                    chemin_temp
+                ]
             }
         ]
     )
@@ -564,9 +740,10 @@ UNKNOWN
             1
         )
 
-        infos[
-            cle.strip()
-        ] = valeur.strip()
+        cle = cle.strip()
+        valeur = valeur.strip()
+
+        infos[cle] = valeur
 
 
     # =====================================================
@@ -574,38 +751,132 @@ UNKNOWN
     # =====================================================
 
     nom_llm = normaliser_texte(
-        infos.get(
-            "Nom (français)",
-            ""
+        extraire_valeur(
+            infos,
+            [
+                "Nom (français)",
+                "Nom français",
+                "Nom",
+                "Nom (francais)",
+                "Nom francais"
+            ]
         )
     )
+
 
     prenom_llm = normaliser_texte(
-        infos.get(
-            "Prénom (français)",
-            ""
+        extraire_valeur(
+            infos,
+            [
+                "Prénom (français)",
+                "Prénom français",
+                "Prenom (français)",
+                "Prenom français",
+                "Prénom",
+                "Prenom"
+            ]
         )
     )
+
 
     cin_llm = normaliser_cin(
-        infos.get(
-            "Numéro CIN",
-            ""
+        extraire_valeur(
+            infos,
+            [
+                "Numéro CIN",
+                "Numero CIN",
+                "Numéro",
+                "Numero",
+                "CIN"
+            ]
         )
     )
+
 
     date_naissance_llm = normaliser_date(
-        infos.get(
-            "Date de naissance",
-            ""
+        extraire_valeur(
+            infos,
+            [
+                "Date de naissance",
+                "Date naissance",
+                "Date de naissance (JJ.MM.AAAA)"
+            ]
         )
     )
 
+
     date_expiration_llm = normaliser_date(
-        infos.get(
-            "Date de validité",
-            ""
+        extraire_valeur(
+            infos,
+            [
+                "Date de validité",
+                "Date validite",
+                "Date d'expiration",
+                "Date expiration"
+            ]
         )
+    )
+
+
+    # =====================================================
+    # FALLBACK OCR
+    # =====================================================
+
+    if not nom_llm and nom_ocr:
+
+        nom_llm = nom_ocr
+
+
+    if not prenom_llm and prenom_ocr:
+
+        prenom_llm = prenom_ocr
+
+
+    if not cin_llm and numero_cin_ocr:
+
+        cin_llm = numero_cin_ocr
+
+
+    if not date_naissance_llm and date_naissance_ocr:
+
+        date_naissance_llm = date_naissance_ocr
+
+
+    if not date_expiration_llm and date_expiration_ocr:
+
+        date_expiration_llm = date_expiration_ocr
+
+
+    # =====================================================
+    # AFFICHAGE DES INFORMATIONS FINALES
+    # =====================================================
+
+    print()
+    print("========== INFORMATIONS FINALES ==========")
+
+    print(
+        "Nom :",
+        nom_llm
+    )
+
+    print(
+        "Prénom :",
+        prenom_llm
+    )
+
+    print(
+        "Numéro CIN :",
+        cin_llm
+    )
+
+    print(
+        "Date de naissance :",
+        date_naissance_llm
+    )
+
+    print(
+        "Date de validité :",
+        date_expiration_llm
     )
 
 
@@ -641,43 +912,65 @@ UNKNOWN
     erreurs = []
 
 
-    if nom_llm != nom_form:
+    if not nom_llm:
+
+        erreurs.append(
+            "Nom non extrait"
+        )
+
+    elif nom_llm != nom_form:
 
         erreurs.append(
             "Nom différent"
         )
 
 
-    if prenom_llm != prenom_form:
+    if not prenom_llm:
+
+        erreurs.append(
+            "Prénom non extrait"
+        )
+
+    elif prenom_llm != prenom_form:
 
         erreurs.append(
             "Prénom différent"
         )
 
 
-    if cin_llm != cin_form:
+    if not cin_llm:
+
+        erreurs.append(
+            "Numéro CIN non extrait"
+        )
+
+    elif cin_llm != cin_form:
 
         erreurs.append(
             "Numéro CIN différent"
         )
 
 
-    if (
-        date_naissance_llm
-        and
-        date_naissance_llm != date_naissance_form
-    ):
+    if not date_naissance_llm:
+
+        erreurs.append(
+            "Date de naissance non extraite"
+        )
+
+    elif date_naissance_llm != date_naissance_form:
 
         erreurs.append(
             "Date de naissance différente"
         )
 
 
-    if (
-        date_expiration_llm
-        and
-        date_expiration_llm != date_expiration_form
-    ):
+    if not date_expiration_llm:
+
+        erreurs.append(
+            "Date d'expiration non extraite"
+        )
+
+    elif date_expiration_llm != date_expiration_form:
 
         erreurs.append(
             "Date d'expiration différente"
@@ -703,12 +996,15 @@ UNKNOWN
 
         print()
         print("============================================")
-        print("VERIFICATION : NON VALIDE")
+        print("VERIFICATION : NON_VALIDE")
         print("============================================")
 
         for erreur in erreurs:
 
-            print("-", erreur)
+            print(
+                "-",
+                erreur
+            )
 
 
     # =====================================================
